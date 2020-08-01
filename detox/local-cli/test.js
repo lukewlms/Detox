@@ -2,6 +2,7 @@ const _ = require('lodash');
 const path = require('path');
 const cp = require('child_process');
 const fs = require('fs-extra');
+const unparse = require('yargs-unparser');
 const environment = require('../src/utils/environment');
 const DetoxRuntimeError = require('../src/errors/DetoxRuntimeError');
 
@@ -37,6 +38,13 @@ module.exports.builder = {
   'no-color': {
     describe: 'Disable colors in log output',
     boolean: true,
+  },
+  R: {
+    alias: 'retries',
+    group: 'Execution:',
+    describe: 'TODO',
+    number: true,
+    default: 0,
   },
   r: {
     alias: 'reuse',
@@ -148,7 +156,8 @@ module.exports.builder = {
   }
 };
 
-const collectExtraArgs = require('./utils/collectExtraArgs')(module.exports.builder);
+const { collectIgnoredArgs, fixMochaSingletonFlags, fixJestSingletonFlags } = require('./utils/collectExtraArgs');
+const ignoredArgs = collectIgnoredArgs(module.exports.builder);
 
 module.exports.handler = async function test(program) {
   const { cliConfig, deviceConfig, runnerConfig } = await composeDetoxConfig({ argv: program });
@@ -173,24 +182,14 @@ module.exports.handler = async function test(program) {
     });
   }
 
-  function getPassthroughArguments() {
-    const args = collectExtraArgs(process.argv.slice(3));
-
-    const hasFolders = args.some(arg => arg && !arg.startsWith('-'));
-    return hasFolders ? args : [...args, runnerConfig.specs];
-  }
-
-  function safeGuardArguments(args) {
-    if (_.last(args).includes(' ')) {
-      return args;
-    }
-
-    const safeArg = _.findLast(args, a => a.includes(' '));
-    if (!safeArg) {
-      return args;
-    }
-
-    return [..._.pull(args, safeArg), safeArg]
+  function getPassthroughArguments(testRunner) {
+    return _(program)
+      .omitBy((_value, key) => ignoredArgs.has(key))
+      .thru(argv => ({ ...argv, _: argv._.slice(1) }))
+      .thru(testRunner === 'jest' ? fixJestSingletonFlags : fixMochaSingletonFlags)
+      .thru(argv => _.isEmpty(argv._) ? { ...argv, _: [runnerConfig.specs] } : argv)
+      .thru(argv => unparse(argv))
+      .value();
   }
 
   function runMocha() {
@@ -205,28 +204,25 @@ module.exports.handler = async function test(program) {
     const command = _.compact([
       cliConfig.inspectBrk ? 'node --inspect-brk' : '',
       (path.join('node_modules', '.bin', runnerConfig.testRunner)),
-      ...safeGuardArguments([
-        (runnerConfig.runnerConfig ? `--${configParam} ${runnerConfig.runnerConfig}` : ''),
-        (cliConfig.configPath ? `--config-path ${cliConfig.configPath}` : ''),
-        (cliConfig.configuration ? `--configuration ${cliConfig.configuration}` : ''),
-        (cliConfig.loglevel ? `--loglevel ${cliConfig.loglevel}` : ''),
-        (cliConfig.noColor ? '--no-colors' : ''),
-        (cliConfig.cleanup ? `--cleanup` : ''),
-        (cliConfig.reuse ? `--reuse` : ''),
-        (isFinite(cliConfig.debugSynchronization) ? `--debug-synchronization ${cliConfig.debugSynchronization}` : ''),
-        (platform ? `--invert --grep ${getPlatformSpecificString()}` : ''),
-        (cliConfig.headless ? `--headless` : ''),
-        (cliConfig.gpu ? `--gpu ${cliConfig.gpu}` : ''),
-        (cliConfig.recordLogs ? `--record-logs ${cliConfig.recordLogs}` : ''),
-        (cliConfig.takeScreenshots ? `--take-screenshots ${cliConfig.takeScreenshots}` : ''),
-        (cliConfig.recordVideos ? `--record-videos ${cliConfig.recordVideos}` : ''),
-        (cliConfig.recordPerformance ? `--record-performance ${cliConfig.recordPerformance}` : ''),
-        (cliConfig.artifactsLocation ? `--artifacts-location "${cliConfig.artifactsLocation}"` : ''),
-        (cliConfig.deviceName ? `--device-name "${cliConfig.deviceName}"` : ''),
-        (cliConfig.useCustomLogger ? `--use-custom-logger "${cliConfig.useCustomLogger}"` : ''),
-        (cliConfig.forceAdbInstall ? `--force-adb-install "${cliConfig.forceAdbInstall}"` : ''),
-      ]),
-      ...getPassthroughArguments(),
+      (runnerConfig.runnerConfig ? `--${configParam} ${runnerConfig.runnerConfig}` : ''),
+      (cliConfig.configPath ? `--config-path ${cliConfig.configPath}` : ''),
+      (cliConfig.configuration ? `--configuration ${cliConfig.configuration}` : ''),
+      (cliConfig.loglevel ? `--loglevel ${cliConfig.loglevel}` : ''),
+      (cliConfig.noColor ? '--no-colors' : ''),
+      (cliConfig.cleanup ? `--cleanup` : ''),
+      (cliConfig.reuse ? `--reuse` : ''),
+      (isFinite(cliConfig.debugSynchronization) ? `--debug-synchronization ${cliConfig.debugSynchronization}` : ''),
+      (platform ? `--invert --grep ${getPlatformSpecificString()}` : ''),
+      (cliConfig.headless ? `--headless` : ''),
+      (cliConfig.gpu ? `--gpu ${cliConfig.gpu}` : ''),
+      (cliConfig.recordLogs ? `--record-logs ${cliConfig.recordLogs}` : ''),
+      (cliConfig.takeScreenshots ? `--take-screenshots ${cliConfig.takeScreenshots}` : ''),
+      (cliConfig.recordVideos ? `--record-videos ${cliConfig.recordVideos}` : ''),
+      (cliConfig.recordPerformance ? `--record-performance ${cliConfig.recordPerformance}` : ''),
+      (cliConfig.artifactsLocation ? `--artifacts-location "${cliConfig.artifactsLocation}"` : ''),
+      (cliConfig.deviceName ? `--device-name "${cliConfig.deviceName}"` : ''),
+      (cliConfig.useCustomLogger ? `--use-custom-logger "${cliConfig.useCustomLogger}"` : ''),
+      (cliConfig.forceAdbInstall ? `--force-adb-install "${cliConfig.forceAdbInstall}"` : ''),
     ]).join(' ');
 
     const detoxEnvironmentVariables = _.pick(cliConfig, [
@@ -258,13 +254,11 @@ module.exports.handler = async function test(program) {
     const command = _.compact([
       cliConfig.inspectBrk ? 'node --inspect-brk' : '',
       path.join('node_modules', '.bin', runnerConfig.testRunner),
-      ...safeGuardArguments([
-        cliConfig.noColor ? ' --no-color' : '',
-        runnerConfig.runnerConfig ? `--config ${runnerConfig.runnerConfig}` : '',
-        platform ? shellQuote(`--testNamePattern=^((?!${getPlatformSpecificString()}).)*$`) : '',
-        `--maxWorkers ${cliConfig.workers}`,
-      ]),
-      ...getPassthroughArguments(),
+      cliConfig.noColor ? ' --no-color' : '',
+      runnerConfig.runnerConfig ? `--config ${runnerConfig.runnerConfig}` : '',
+      platform ? shellQuote(`--testNamePattern=^((?!${getPlatformSpecificString()}).)*$`) : '',
+      `--maxWorkers ${cliConfig.workers}`,
+      ...getPassthroughArguments('jest'),
     ]).join(' ');
 
     const detoxEnvironmentVariables = {

@@ -1,7 +1,11 @@
 const _ = require('lodash');
-const parseArgv = require('yargs-parser');
+const booleanJestArgs = _(require('jest-cli/build/cli/args'))
+  .thru(args => args.options)
+  .pickBy(({ type }) => type === 'boolean')
+  .thru(collectIgnoredArgs)
+  .value();
 
-function collectBlacklistedArgs(builder) {
+function collectIgnoredArgs(builder) {
   return Object.entries(builder).reduce(
     (set, [key, option]) => {
       if (option.alias) {
@@ -16,41 +20,39 @@ function collectBlacklistedArgs(builder) {
 
       return set.add(key);
     },
-    new Set(['$0', '_', '--'])
+    new Set()
   );
 }
 
-function configureCollectExtraArgs(builder) {
-  const blacklistedArgs = collectBlacklistedArgs(builder);
+function fixJestSingletonFlags(argv) {
+  const result = {};
+  const passthrough = [];
 
-  /***
-   * @param {Object} argv
-   * @returns {string[]}
-   */
-  function collectExtraArgs(argv) {
-    const parsed = parseArgv(argv, {
-      configuration: {
-        'boolean-negation': false,
-        'camel-case-expansion': false,
-        'dot-notation': false,
-        'parse-numbers': false,
-        'duplicate-arguments-array': false
-      }
-    });
+  for (const entry of Object.entries(argv)) {
+    const [key, value] = entry;
+    if (key === '_') {
+      continue;
+    }
 
-    const passthrough = _.chain(parsed)
-      .omitBy((_value, key) => blacklistedArgs.has(key))
-      .entries()
-      .map(([key, value]) => {
-        return value === true ? `--${key}` : `--${key} ${value}`;
-      })
-      .concat(parsed['_'])
-      .value();
-
-    return passthrough;
+    const positiveKey = key.startsWith('no-') ? key.slice(3) : key;
+    if (booleanJestArgs.has(positiveKey) && typeof value !== 'boolean') {
+      result[positiveKey] = key === positiveKey;
+      passthrough.push(value);
+    } else {
+      result[key] = value;
+    }
   }
 
-  return collectExtraArgs;
+  result._ = passthrough.concat(argv._);
+  return result;
 }
 
-module.exports = configureCollectExtraArgs;
+function fixMochaSingletonFlags(argv) {
+  return argv;
+}
+
+module.exports = {
+  collectIgnoredArgs,
+  fixJestSingletonFlags,
+  fixMochaSingletonFlags,
+};
