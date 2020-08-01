@@ -223,6 +223,7 @@ module.exports.handler = async function test(program) {
       (cliConfig.deviceName ? `--device-name "${cliConfig.deviceName}"` : ''),
       (cliConfig.useCustomLogger ? `--use-custom-logger "${cliConfig.useCustomLogger}"` : ''),
       (cliConfig.forceAdbInstall ? `--force-adb-install "${cliConfig.forceAdbInstall}"` : ''),
+      ...getPassthroughArguments('mocha'),
     ]).join(' ');
 
     const detoxEnvironmentVariables = _.pick(cliConfig, [
