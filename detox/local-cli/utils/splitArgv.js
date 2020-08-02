@@ -39,8 +39,13 @@ function disengageBooleanArgs(argv, booleanKeys) {
     }
   }
 
-  result._ = passthrough.concat(argv._);
-  return result;
+  return {
+    specs: passthrough.concat(argv._),
+    passthrough: {
+      _: [],
+      ...result,
+    },
+  };
 }
 
 function getJestBooleanArgs() {

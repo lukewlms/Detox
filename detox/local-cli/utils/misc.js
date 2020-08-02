@@ -1,4 +1,4 @@
-const fs = require('fs');
+const fs = require('fs-extra');
 const environment = require('../../src/utils/environment');
 
 function clearDeviceRegistryLockFile(platform) {

@@ -4,18 +4,19 @@ const cp = require('child_process');
 const fs = require('fs-extra');
 const unparse = require('yargs-unparser');
 const DetoxRuntimeError = require('../src/errors/DetoxRuntimeError');
+const environment = require('../src/utils/environment');
 
 const log = require('../src/utils/logger').child({ __filename });
 const shellQuote = require('./utils/shellQuote');
 const { clearDeviceRegistryLockFile, getPlatformSpecificString, printEnvironmentVariables } = require('./utils/misc');
-const { splitArgv, splitRunnerArgv } = require('./utils/ArgsForwarder');
+const splitArgv = require('./utils/splitArgv');
 const { composeDetoxConfig } = require('../src/configuration');
 
 module.exports.command = 'test';
 module.exports.desc = 'Run your test suite with the test runner specified in package.json';
 module.exports.builder = require('./utils/testCommandArgs');
 module.exports.handler = async function test(argv) {
-  const { detoxArgs, runnerArgs } = splitArgv(argv);
+  const { detoxArgs, runnerArgs } = splitArgv.detox(argv);
   const { cliConfig, deviceConfig, runnerConfig } = await composeDetoxConfig({ argv: detoxArgs });
   const [ platform ] = deviceConfig.type.split('.');
   const hasMultipleWorkers = cliConfig.workers != 1;
@@ -46,15 +47,16 @@ module.exports.handler = async function test(argv) {
   }());
 
   function prepareMochaArgs() {
+    const { specs, passthrough } = splitArgv.mocha(runnerArgs);
     const configParam = path.extname(runnerConfig.runnerConfig) === '.opts'
       ? 'opts'
       : 'config';
 
-    return {
+    const oo = {
       argv: {
         [configParam]: runnerConfig.runnerConfig || undefined,
         cleanup: Boolean(cliConfig.cleanup) || undefined,
-        colors: !cliConfig.noColor,
+        colors: !cliConfig.noColor && undefined,
         configuration: cliConfig.configuration || undefined,
         gpu: cliConfig.gpu || undefined,
         // TODO: check if we can --grep from user
@@ -67,25 +69,35 @@ module.exports.handler = async function test(argv) {
         'config-path': cliConfig.configPath || undefined,
         'debug-synchronization': isFinite(cliConfig.debugSynchronization) ? cliConfig.debugSynchronization : undefined,
         'device-name': cliConfig.deviceName || undefined,
-        'force-adb-install': cliConfig.forceAdbInstall || undefined,
+        'force-adb-install': platform === 'android' && cliConfig.forceAdbInstall || undefined,
         'record-logs': cliConfig.recordLogs || undefined,
         'record-performance': cliConfig.recordPerformance || undefined,
         'record-videos': cliConfig.recordVideos || undefined,
         'take-screenshots': cliConfig.takeScreenshots || undefined,
         'use-custom-logger': cliConfig.useCustomLogger || undefined,
+
+        ...passthrough,
       },
       env: _.pick(cliConfig, ['deviceLaunchArgs']),
+      specs,
     };
+
+    return oo;
   }
 
   function prepareJestArgs() {
+    const { specs, passthrough } = splitArgv.jest(runnerArgs);
+
     return {
       argv: {
-        color: !cliConfig.noColor,
+        color: !cliConfig.noColor && undefined,
         config: runnerConfig.runnerConfig || undefined,
-        testNamePattern: platform && `^((?!${getPlatformSpecificString(platform)}).)*$`,
+        testNamePattern: platform ? shellQuote(`^((?!${getPlatformSpecificString(platform)}).)*$`) : undefined,
         maxWorkers: cliConfig.workers,
+
+        ...passthrough,
       },
+
       env: _.omitBy({
         DETOX_START_TIMESTAMP: Date.now(),
         ..._.pick(cliConfig, [
@@ -109,10 +121,12 @@ module.exports.handler = async function test(argv) {
           'forceAdbInstall',
         ]),
         readOnlyEmu: platform === 'android' ? hasMultipleWorkers : undefined,
-        reportSpecs: (_.isUndefined(jestReportSpecsArg)
+        reportSpecs: _.isUndefined(cliConfig.jestReportSpecs)
           ? !hasMultipleWorkers
           : `${cliConfig.jestReportSpecs}` === 'true',
       }, _.isUndefined),
+
+      specs,
     };
   }
 
@@ -130,7 +144,15 @@ module.exports.handler = async function test(argv) {
     } catch (e) {
       launchError = e;
 
-      const lastFailedTests = fs.readFileSync(environment.getLastFailedTestsPath(), 'utf8');
+      const lastFailedTxt = environment.getLastFailedTestsPath();
+      const lastFailedTests = fs.existsSync(lastFailedTxt)
+        ? fs.readFileSync(lastFailedTxt, 'utf8')
+        : '';
+
+      if (!lastFailedTests) {
+        throw e;
+      }
+
       log.error('Test run has failed for the following specs:\n' + lastFailedTests);
       forwardedArgs.specs = lastFailedTests.split('\n');
     }
@@ -147,7 +169,7 @@ module.exports.handler = async function test(argv) {
       ...argv,
     }, {
       command: runnerConfig.testRunner,
-    });
+    }).join(' ');
 
     log.info(printEnvironmentVariables(env) + command);
     cp.execSync(command, {
@@ -155,7 +177,7 @@ module.exports.handler = async function test(argv) {
       stdio: 'inherit',
       env: {
         ...process.env,
-        ...detoxEnvironmentVariables
+        ...env,
       }
     });
   }
