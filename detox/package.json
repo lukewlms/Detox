@@ -32,6 +32,7 @@
     "eslint": "^4.11.0",
     "eslint-plugin-node": "^6.0.1",
     "jest": "26.x.x",
+    "mocha": "^8.1.0",
     "mockdate": "^2.0.1",
     "prettier": "1.7.0",
     "react-native": "0.62.x",
