@@ -1,4 +1,4 @@
-// Replace this with your app's package
+// Replace "com.example" here and below with your app's package name
 package com.example;
 
 import com.wix.detox.Detox;
